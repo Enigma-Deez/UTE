@@ -1,78 +1,85 @@
 /* src/components/TimerView.jsx */
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
+import { Play, Pause, RotateCcw, Settings2 } from 'lucide-react';
+import clsx from 'clsx';
+
 import useTimerStore from '../store/useTimerStore';
 import { audioEngine } from '../services/AudioEngine';
 import { useWakeLock } from '../hooks/useWakeLock';
-import TimerWorker from '../workers/timer.worker?worker'; // Vite Worker Import
+import TimerWorker from '../workers/timer.worker?worker';
+
+import ModeSelector from './controls/ModeSelector';
+import AmbientToggle from './controls/AmbientToggle';
+import SettingsModal from './SettingsModal';
+import TimerInput from './controls/TimerInput'; // NEW
+import CreditsFooter from './CreditsFooter'; // NEW
 
 const TimerView = () => {
-  // State
   const { 
-    status, remaining, duration, progress, 
+    status, remaining, elapsed, duration, progress, mode,
+    pomoPhase, nextPomoPhase, 
     tick, setStatus, reset 
   } = useTimerStore();
 
-  // Refs
+  const [showSettings, setShowSettings] = useState(false);
   const workerRef = useRef(null);
-
-  // Wake Lock (Active only when running)
+  
   useWakeLock(status === 'running');
 
-  // Initialize Worker & Audio
   useEffect(() => {
     workerRef.current = new TimerWorker();
-
     workerRef.current.onmessage = (e) => {
       const { type, payload } = e.data;
-      if (type === 'TICK') {
-        tick(payload);
-      } else if (type === 'COMPLETED') {
-        setStatus('completed');
-        audioEngine.playBell('bowl_end', 1.0); // End bell
-        audioEngine.stopAll(5); // Fade out ambient over 5s
+      if (type === 'TICK') tick(payload);
+      else if (type === 'COMPLETED') {
+        if (mode === 'pomodoro') {
+          audioEngine.playBell('bowl', 1.0, 10); // 10s max
+          nextPomoPhase(); 
+        } else {
+          setStatus('completed');
+          audioEngine.playBell('bowl', 1.0, 10); // 10s max
+          audioEngine.stopAll(5);
+        }
       }
     };
+    
+    // Load Assets
+    const loadAssets = async () => {
+       audioEngine.loadSound('bowl', '/sounds/bowl.mp3'); 
+       audioEngine.loadSound('chime', '/sounds/chime.mp3');
+       audioEngine.loadSound('rain', '/sounds/rain.mp3');
+       audioEngine.loadSound('forest', '/sounds/forest.mp3');
+    };
+    loadAssets();
 
-    // Preload Audio (Replace with real URLs)
-    audioEngine.loadSound('bowl_start', '/sounds/bowl_start.mp3');
-    audioEngine.loadSound('bowl_end', '/sounds/bowl_end.mp3');
-    audioEngine.loadSound('rain', '/sounds/rain_loop.mp3');
-
-    // Listen for Checkpoints (from store logic)
-    const handleCheckpoint = () => audioEngine.playBell('bowl_start', 0.5);
-    window.addEventListener('checkpoint-reached', handleCheckpoint);
+    // Listener for Interval Bells (Meditation)
+    // NOTE: Max duration 10s applied here
+    const handleInterval = () => audioEngine.playBell('chime', 0.8, 10); 
+    window.addEventListener('interval-bell', handleInterval);
 
     return () => {
       workerRef.current.terminate();
-      window.removeEventListener('checkpoint-reached', handleCheckpoint);
+      window.removeEventListener('interval-bell', handleInterval);
     };
-  }, []);
+  }, [mode]); 
 
-  // Timer Controls
   const toggleTimer = () => {
-    audioEngine.init(); // Unlock AudioContext
-
+    audioEngine.init();
     if (status === 'running') {
       workerRef.current.postMessage({ type: 'PAUSE' });
       setStatus('paused');
-      audioEngine.stopAll(1); // Quick fade out on pause
+      // Only stop bells/ambients if you want silence on pause. 
+      // Usually ambient continues in premium apps, but we'll dim it.
+      // For now, let's leave ambient running but stop bells?
+      // User requested "Sub alarms always ring". 
     } else {
-      // START or RESUME
       workerRef.current.postMessage({ 
         type: 'START', 
-        payload: { durationSeconds: duration } 
+        payload: { durationSeconds: remaining } 
       });
       setStatus('running');
-      
-      // If just starting, play ambient
-      if (status === 'idle') {
-        audioEngine.playBell('bowl_start');
-        audioEngine.playAmbient('rain');
-      } else {
-        // Resuming ambient
-        audioEngine.playAmbient('rain');
-      }
+      if (status === 'idle') audioEngine.playBell('bowl', 1.0, 10);
     }
   };
 
@@ -82,69 +89,79 @@ const TimerView = () => {
     reset();
   };
 
-  // SVG Math
+  // Visuals
   const radius = 120;
   const circumference = 2 * Math.PI * radius;
-  const strokeDashoffset = circumference * (1 - progress);
-
-  // Time Formatter
-  const formatTime = (seconds) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
+  const dashOffset = mode === 'flow' ? circumference : circumference * (1 - progress); 
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white">
+    <div className="h-screen w-full bg-black text-white flex flex-col items-center justify-between p-6 overflow-hidden relative">
       
-      {/* Timer Container - Glassmorphism */}
-      <div className="relative w-80 h-80 flex items-center justify-center bg-white/5 backdrop-blur-xl rounded-full shadow-2xl border border-white/10">
-        
-        {/* SVG Ring */}
-        <svg className="absolute w-full h-full transform -rotate-90" viewBox="0 0 300 300">
-          {/* Track */}
-          <circle
-            cx="150" cy="150" r={radius}
-            stroke="#1f2937" strokeWidth="8" fill="transparent"
-          />
-          {/* Progress Indicator */}
-          <motion.circle
-            cx="150" cy="150" r={radius}
-            stroke="#C41E3A" strokeWidth="8" fill="transparent"
-            strokeLinecap="round"
-            strokeDasharray={circumference}
-            animate={{ strokeDashoffset }}
-            transition={{ duration: 1, ease: "linear" }} // Smooth 1s transition matching worker
-          />
-        </svg>
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      <CreditsFooter />
 
-        {/* Text Display */}
-        <div className="z-10 text-center">
-          <div className="text-6xl font-light tracking-widest font-mono">
-            {formatTime(remaining)}
-          </div>
-          <div className="text-gray-400 mt-2 uppercase text-sm tracking-widest">
-            {status === 'idle' ? 'Ready' : status}
-          </div>
+      {/* HEADER */}
+      <header className="w-full flex justify-center pt-4 z-10">
+        <ModeSelector />
+      </header>
+
+      {/* STAGE */}
+      <main className="flex-1 flex flex-col items-center justify-center w-full max-w-md relative">
+        <div className="relative w-72 h-72 sm:w-80 sm:h-80 flex items-center justify-center">
+            {/* Ring */}
+            <svg className="absolute w-full h-full transform -rotate-90 drop-shadow-2xl pointer-events-none" viewBox="0 0 300 300">
+                <circle cx="150" cy="150" r={radius} stroke="#1f2937" strokeWidth="6" fill="transparent" />
+                <motion.circle
+                    cx="150" cy="150" r={radius}
+                    stroke={mode === 'pomodoro' && pomoPhase !== 'work' ? "#10b981" : "#C41E3A"} 
+                    strokeWidth="8" fill="transparent"
+                    strokeLinecap="round"
+                    strokeDasharray={circumference}
+                    animate={{ strokeDashoffset: dashOffset }}
+                    transition={{ duration: 1, ease: "linear" }}
+                />
+            </svg>
+
+            {/* Editable Time Display */}
+            <TimerInput />
         </div>
-      </div>
+      </main>
 
-      {/* Controls */}
-      <div className="mt-12 flex gap-6">
-        <button 
-          onClick={handleReset}
-          className="px-6 py-3 rounded-full bg-gray-800 hover:bg-gray-700 text-gray-300 transition-all"
-        >
-          Reset
-        </button>
+      {/* DASHBOARD */}
+      <footer className="w-full max-w-lg flex flex-col items-center gap-8 pb-8 z-10">
+        <div className="flex items-center gap-10">
+          <button 
+            onClick={handleReset}
+            className="p-4 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-white/5"
+          >
+            <RotateCcw size={22} />
+          </button>
 
-        <button 
-          onClick={toggleTimer}
-          className="px-8 py-3 rounded-full bg-red-700 hover:bg-red-600 text-white font-semibold tracking-wide shadow-lg shadow-red-900/50 transition-all transform active:scale-95"
-        >
-          {status === 'running' ? 'Pause' : 'Start'}
-        </button>
-      </div>
+          <button 
+            onClick={toggleTimer}
+            className={clsx(
+              "p-7 rounded-[2.5rem] text-white shadow-lg transition-all active:scale-95 border-t",
+              mode === 'pomodoro' && pomoPhase !== 'work' 
+                 ? "bg-gradient-to-b from-emerald-600 to-emerald-800 shadow-emerald-900/40 border-emerald-500"
+                 : "bg-gradient-to-b from-red-600 to-red-800 shadow-red-900/40 border-red-500"
+            )}
+          >
+            {status === 'running' ? <Pause size={32} fill="currentColor" /> : <Play size={32} fill="currentColor" className="ml-1" />}
+          </button>
+          
+          <button 
+             className={clsx(
+               "p-4 rounded-full transition-all border border-white/5",
+               showSettings ? "bg-white text-black" : "bg-white/5 text-gray-400 hover:text-white"
+             )}
+             onClick={() => setShowSettings(true)}
+          >
+             <Settings2 size={22} />
+          </button>
+        </div>
+
+        <AmbientToggle />
+      </footer>
     </div>
   );
 };

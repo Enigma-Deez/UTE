@@ -1,17 +1,11 @@
-/* src/services/AudioEngine.js */
-
 class AudioEngine {
   constructor() {
     this.ctx = null;
-    this.buffers = {}; // Cache decoded audio: { 'bell': AudioBuffer }
-    
-    // Nodes
+    this.buffers = {}; 
     this.masterGain = null;
-    this.ambientNodes = { source: null, gain: null }; // Current ambient
-    this.nextAmbientNodes = { source: null, gain: null }; // For crossfading
+    this.ambientNodes = { source: null, gain: null }; 
   }
 
-  // Initialize context on first user interaction (browser requirement)
   init() {
     if (!this.ctx) {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -25,12 +19,10 @@ class AudioEngine {
   }
 
   async loadSound(key, url) {
-    if (this.buffers[key]) return; // Already loaded
-
+    if (this.buffers[key]) return; 
     try {
       const response = await fetch(url);
       const arrayBuffer = await response.arrayBuffer();
-      // Use init() if context doesn't exist yet for decoding
       if (!this.ctx) this.init(); 
       const audioBuffer = await this.ctx.decodeAudioData(arrayBuffer);
       this.buffers[key] = audioBuffer;
@@ -39,8 +31,9 @@ class AudioEngine {
     }
   }
 
-  /* --- ALERT CHANNEL (Polyphonic) --- */
-  playBell(key, volume = 1.0) {
+  /* --- ALERT CHANNEL (Bells) --- */
+  // Added: maxDuration parameter for the 10s fade requirement
+  playBell(key, volume = 1.0, maxDuration = 10) {
     if (!this.ctx || !this.buffers[key]) return;
 
     const source = this.ctx.createBufferSource();
@@ -52,55 +45,68 @@ class AudioEngine {
     source.connect(bellGain);
     bellGain.connect(this.masterGain);
 
-    source.start(0);
-    // Garbage collection handles the nodes after playback ends
+    const now = this.ctx.currentTime;
+    source.start(now);
+
+    // LOGIC: If bell is longer than maxDuration, fade it out gracefully
+    if (source.buffer.duration > maxDuration) {
+        // Start fading 2 seconds before the limit
+        const fadeStart = now + maxDuration - 2;
+        const fadeEnd = now + maxDuration;
+        
+        bellGain.gain.setValueAtTime(volume, fadeStart);
+        bellGain.gain.linearRampToValueAtTime(0.001, fadeEnd);
+        source.stop(fadeEnd); // Hard stop at the limit
+    }
   }
 
-  /* --- AMBIENT CHANNEL (Cross-fading) --- */
-  playAmbient(key, volume = 0.8, fadeDuration = 3) {
+  /* --- AMBIENT CHANNEL --- */
+  playAmbient(key, volume = 0.6, fadeDuration = 3) {
     if (!this.ctx || !this.buffers[key]) return;
-
     const now = this.ctx.currentTime;
 
-    // 1. Create new Ambient Source
     const newSource = this.ctx.createBufferSource();
     newSource.buffer = this.buffers[key];
     newSource.loop = true;
 
     const newGain = this.ctx.createGain();
-    newGain.gain.setValueAtTime(0, now); // Start silent
+    newGain.gain.setValueAtTime(0, now); 
 
     newSource.connect(newGain);
     newGain.connect(this.masterGain);
     newSource.start(0);
 
-    // 2. Cross-fade Logic
-    // Fade IN new track
+    // Fade IN
     newGain.gain.linearRampToValueAtTime(volume, now + fadeDuration);
 
-    // Fade OUT old track (if exists)
-    if (this.ambientNodes.source) {
-      this.ambientNodes.gain.gain.linearRampToValueAtTime(0, now + fadeDuration);
-      this.ambientNodes.source.stop(now + fadeDuration);
-    }
+    // Fade OUT old ambient only
+    this.stopAmbient(fadeDuration);
 
-    // 3. Swap references
     this.ambientNodes = { source: newSource, gain: newGain };
   }
 
+  // NEW: Only stops the rain/forest, leaves the bells alone
+  stopAmbient(fadeDuration = 2) {
+    if (this.ambientNodes.source) {
+      const now = this.ctx.currentTime;
+      this.ambientNodes.gain.gain.cancelScheduledValues(now);
+      this.ambientNodes.gain.gain.setValueAtTime(this.ambientNodes.gain.gain.value, now);
+      this.ambientNodes.gain.gain.linearRampToValueAtTime(0, now + fadeDuration);
+      this.ambientNodes.source.stop(now + fadeDuration);
+      this.ambientNodes = { source: null, gain: null };
+    }
+  }
+
+  // Stops everything (e.g. when leaving the app)
   stopAll(fadeDuration = 1) {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
-    
-    // Ramp master down
     this.masterGain.gain.linearRampToValueAtTime(0, now + fadeDuration);
-
     setTimeout(() => {
       if (this.ambientNodes.source) this.ambientNodes.source.stop();
-      this.masterGain.gain.setValueAtTime(1, this.ctx.currentTime); // Reset for next time
+      this.masterGain.gain.setValueAtTime(1, this.ctx.currentTime); 
     }, fadeDuration * 1000);
   }
 }
 
-// Export singleton
 export const audioEngine = new AudioEngine();
