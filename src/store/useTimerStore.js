@@ -1,135 +1,141 @@
+/* src/store/useTimerStore.js */
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 
 const useTimerStore = create(
   persist(
     (set, get) => ({
+      // --- MODES ---
+      mode: 'meditation', 
+      
       // --- CONFIGURATION ---
-      mode: 'meditation', // 'meditation' | 'pomodoro' | 'flow'
-      
-      // Meditation Settings
-      meditationDuration: 600, // 10 mins default
-      intervals: [], // Array of numbers (seconds) to ring bells
-      
-      // Pomodoro Settings
-      pomoConfig: {
-        work: 25,      // minutes
-        shortBreak: 5, // minutes
-        longBreak: 15, // minutes
-        autoStart: false,
+      settings: {
+        meditation: { 
+          duration: 600, 
+          infinite: false,
+          intervals: [], 
+          soundEnd: 'bowl',
+          soundInterval: 'chime'
+        },
+        pomodoro: { work: 25, shortBreak: 5, longBreak: 15 },
+        flow: { sound90Min: 'chime' }
       },
-      pomoPhase: 'work', // 'work' | 'shortBreak' | 'longBreak'
-      pomoCycleCount: 0,
-      
+
       // --- RUNTIME STATE ---
       status: 'idle', 
       remaining: 600,
       elapsed: 0,
       progress: 0,
       
+      // Flow / Productivity Metrics
+      distractions: 0,
+      flowState: 'none', 
+      lastSession: null, 
+
+      // Pomodoro
+      pomoPhase: 'work',
+      pomoCycleCount: 0,
+
       // --- ACTIONS ---
 
       setMode: (mode) => {
-        const state = get();
-        let newDuration = 0;
+        const { settings } = get();
+        let newRemaining = 0;
         
-        if (mode === 'meditation') newDuration = state.meditationDuration;
-        if (mode === 'pomodoro') newDuration = state.pomoConfig.work * 60;
-        if (mode === 'flow') newDuration = 0;
-
+        if (mode === 'meditation') newRemaining = settings.meditation.infinite ? 0 : settings.meditation.duration;
+        if (mode === 'pomodoro') newRemaining = settings.pomodoro.work * 60;
+        // Flow/Stopwatch start at 0
+        
         set({ 
-          mode, 
-          status: 'idle', 
-          remaining: newDuration, 
-          elapsed: 0, 
-          progress: 0,
-          pomoPhase: 'work' // Reset pomo phase
+          mode, status: 'idle', remaining: newRemaining, elapsed: 0, progress: 0,
+          distractions: 0, flowState: 'none', lastSession: null
         });
       },
 
-      // Update Meditation Interval (Add/Remove checkpoint)
-      toggleInterval: (timeInSeconds) => {
-        const { intervals } = get();
-        if (intervals.includes(timeInSeconds)) {
-          set({ intervals: intervals.filter(t => t !== timeInSeconds) });
-        } else {
-          set({ intervals: [...intervals, timeInSeconds].sort((a,b) => a - b) });
+      // *** THE MISSING FIX *** 
+      // This handles the manual time input from the UI
+      setDuration: (seconds) => {
+        const { mode } = get();
+        if (mode === 'meditation') {
+          get().updateSettings('meditation', { duration: seconds });
+        } else if (mode === 'pomodoro') {
+          // Pomodoro settings usually store minutes, so we convert.
+          // Decimals (e.g., 0.5 minutes for 30s) work fine mathematically.
+          get().updateSettings('pomodoro', { work: seconds / 60 });
         }
+        // Force a reset to apply the new time immediately
+        get().reset();
       },
 
-      updatePomoSettings: (newConfig) => {
-        set((state) => ({ 
-          pomoConfig: { ...state.pomoConfig, ...newConfig } 
+      addDistraction: () => set((state) => ({ distractions: state.distractions + 1 })),
+
+      updateSettings: (mode, newValues) => {
+        set((state) => ({
+          settings: { ...state.settings, [mode]: { ...state.settings[mode], ...newValues } }
         }));
-        // If currently in Pomodoro and idle, update the display immediately
-        const state = get();
-        if (state.mode === 'pomodoro' && state.status === 'idle') {
-           set({ remaining: newConfig.work * 60 });
-        }
+        // Refresh if idle
+        if (get().status === 'idle') get().setMode(mode);
       },
 
-      setDuration: (duration) => set({ meditationDuration: duration, remaining: duration, progress: 0 }),
-      
+      toggleInterval: (timeInSeconds) => {
+        const { settings } = get();
+        const current = settings.meditation.intervals;
+        const newIntervals = current.includes(timeInSeconds)
+          ? current.filter(t => t !== timeInSeconds)
+          : [...current, timeInSeconds].sort((a,b) => a - b);
+        get().updateSettings('meditation', { intervals: newIntervals });
+      },
+
       setStatus: (status) => set({ status }),
 
-      // --- THE CLOCK TICK (Called by Worker) ---
       tick: ({ remaining, elapsed, progress }) => {
         const state = get();
-        set({ remaining, elapsed, progress });
+        const { mode, settings } = state;
 
-        // 1. Meditation Interval Logic
-        if (state.mode === 'meditation' && state.intervals.includes(elapsed)) {
-          window.dispatchEvent(new CustomEvent('interval-bell'));
-        }
-      },
-
-      // --- POMODORO CYCLE LOGIC ---
-      nextPomoPhase: () => {
-        const { pomoPhase, pomoCycleCount, pomoConfig } = get();
-        
-        let nextPhase = 'work';
-        let nextDuration = pomoConfig.work * 60;
-        let nextCount = pomoCycleCount;
-
-        // Logic: Work -> Short Break -> Work -> ... -> (4th) Long Break
-        if (pomoPhase === 'work') {
-          nextCount += 1;
-          if (nextCount % 4 === 0) {
-            nextPhase = 'longBreak';
-            nextDuration = pomoConfig.longBreak * 60;
-          } else {
-            nextPhase = 'shortBreak';
-            nextDuration = pomoConfig.shortBreak * 60;
-          }
-        } else {
-          // Coming back from any break
-          nextPhase = 'work';
-          nextDuration = pomoConfig.work * 60;
+        // Flow Logic
+        let newFlowState = state.flowState;
+        if (mode === 'flow') {
+          if (elapsed > 1200) newFlowState = 'flow_zone'; 
+          if (elapsed > 5400) newFlowState = 'ultradian_limit'; 
+          if (elapsed === 5400) window.dispatchEvent(new CustomEvent('ultradian-bell'));
         }
 
-        set({
-          status: 'idle', // Always pause between phases (unless auto-start implemented later)
-          pomoPhase: nextPhase,
-          remaining: nextDuration,
-          pomoCycleCount: nextCount,
-          progress: 0
-        });
+        // Meditation Interval Logic
+        if (mode === 'meditation' && settings.meditation.intervals.includes(elapsed)) {
+           window.dispatchEvent(new CustomEvent('interval-bell'));
+        }
+
+        set({ remaining, elapsed, progress, flowState: newFlowState });
       },
 
-      reset: () => {
+      finishSession: async (rating = 0) => {
         const state = get();
-        // Re-run setMode to reset time based on current mode
-        state.setMode(state.mode);
-      }
+        const mins = Math.floor(state.elapsed / 60);
+        let breakRec = 5;
+        if (mins >= 25 && mins < 50) breakRec = 10;
+        if (mins >= 50 && mins < 90) breakRec = 15;
+        if (mins >= 90) breakRec = 25;
+
+        const sessionData = {
+          id: crypto.randomUUID(),
+          type: state.mode,
+          startTime: Date.now() - (state.elapsed * 1000),
+          duration: state.elapsed,
+          distractions: state.distractions,
+          rating,
+          breakRecommendation: breakRec,
+          completed: true
+        };
+
+        set({ lastSession: sessionData, status: 'idle' });
+      },
+
+      reset: () => get().setMode(get().mode)
     }),
     {
-      name: 'timer-storage-v2',
+      name: 'timer-storage-v4',
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({ 
-        meditationDuration: state.meditationDuration,
-        intervals: state.intervals,
-        pomoConfig: state.pomoConfig
-      }),
+      partialize: (state) => ({ settings: state.settings, mode: state.mode }),
     }
   )
 );

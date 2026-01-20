@@ -1,37 +1,62 @@
+/* src/components/controls/TimerInput.jsx */
 import React, { useState, useEffect, useRef } from 'react';
 import useTimerStore from '../../store/useTimerStore';
 import clsx from 'clsx';
 
 const TimerInput = () => {
-  const { remaining, elapsed, mode, status, setDuration, reset } = useTimerStore();
+  const { 
+    remaining, 
+    elapsed, 
+    mode, 
+    settings, 
+    status, 
+    setDuration, 
+    reset 
+  } = useTimerStore();
+
   const [isEditing, setIsEditing] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef(null);
 
+  // --- 1. DETERMINE IF WE ARE COUNTING UP OR DOWN ---
+  const isCountUp = 
+    mode === 'flow' || 
+    mode === 'stopwatch' || 
+    (mode === 'meditation' && settings?.meditation?.infinite);
+
+  // --- 2. SELECT THE CORRECT TIME SOURCE ---
+  // The Bug was here: It previously only checked mode === 'flow'
+  const displayTime = isCountUp ? elapsed : remaining;
+
   // Sync input with store when not editing
   useEffect(() => {
     if (!isEditing) {
-      const time = mode === 'flow' ? elapsed : remaining;
-      const m = Math.floor(time / 60);
-      const s = time % 60;
-      setInputValue(`${m}:${s < 10 ? '0' : ''}${s}`);
+      const m = Math.floor(displayTime / 60);
+      const s = displayTime % 60;
+      // Format: MM:SS or HH:MM:SS if > 60 mins
+      const h = Math.floor(m / 60);
+      const mDisplay = m % 60;
+
+      let formatted = "";
+      if (h > 0) {
+        formatted = `${h}:${mDisplay < 10 ? '0' : ''}${mDisplay}:${s < 10 ? '0' : ''}${s}`;
+      } else {
+        formatted = `${m}:${s < 10 ? '0' : ''}${s}`;
+      }
+      
+      setInputValue(formatted);
     }
-  }, [remaining, elapsed, isEditing, mode]);
+  }, [displayTime, isEditing]);
 
   const handleClick = () => {
-    if (status === 'running') return; // Lock while running
-    if (mode === 'flow') return; // Flow is count-up, usually not editable start time
+    if (status === 'running') return; 
+    if (isCountUp) return; // Cannot edit start time for Stopwatch/Flow
     
     setIsEditing(true);
-    // When editing starts, clear formatting for easier typing? 
-    // Or keep it. Let's keep current value but select it.
     setTimeout(() => inputRef.current?.select(), 10);
   };
 
-  const handleBlur = () => {
-    finishEditing();
-  };
-
+  const handleBlur = () => finishEditing();
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') finishEditing();
   };
@@ -39,24 +64,21 @@ const TimerInput = () => {
   const finishEditing = () => {
     setIsEditing(false);
     
-    // Parse logic: Supports "20" (mins), "20:00" (mm:ss), "1:00:00" (hh:mm:ss)
+    // Parse input (MM, MM:SS, or HH:MM:SS)
     const parts = inputValue.split(':').map(Number);
     let newSeconds = 0;
 
     if (parts.length === 1) {
-      // User typed "20" -> 20 minutes
       newSeconds = parts[0] * 60;
     } else if (parts.length === 2) {
-      // User typed "20:30"
       newSeconds = (parts[0] * 60) + parts[1];
     } else if (parts.length === 3) {
-      // HH:MM:SS
       newSeconds = (parts[0] * 3600) + (parts[1] * 60) + parts[2];
     }
 
     if (!isNaN(newSeconds) && newSeconds > 0) {
       setDuration(newSeconds);
-      reset(); // Reset timer to this new duration
+      reset(); 
     }
   };
 
@@ -78,7 +100,7 @@ const TimerInput = () => {
           onClick={handleClick}
           className={clsx(
             "text-6xl sm:text-7xl font-light tracking-tighter font-mono tabular-nums select-none",
-            status !== 'running' && mode !== 'flow' ? "cursor-pointer hover:text-gray-200 hover:scale-105 transition-all" : ""
+            status !== 'running' && !isCountUp ? "cursor-pointer hover:text-gray-200 hover:scale-105 transition-all" : ""
           )}
         >
           {inputValue}
@@ -90,7 +112,7 @@ const TimerInput = () => {
         "mt-2 text-xs font-bold tracking-[0.3em] uppercase transition-colors",
         status === 'running' ? "text-red-500/80" : "text-gray-500"
       )}>
-        {isEditing ? 'Type MM or MM:SS' : (status === 'idle' ? 'Click' : status)}
+        {isEditing ? 'Type MM:SS' : (status === 'idle' && !isCountUp ? 'Click Time to Edit' : status)}
       </span>
     </div>
   );
