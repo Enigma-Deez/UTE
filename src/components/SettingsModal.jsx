@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Plus, Trash2 } from 'lucide-react';
 import useTimerStore from '../store/useTimerStore';
+import SequenceEditor from './SequenceEditor'; // Ensure this is imported
 import clsx from 'clsx';
 
 const sounds = [
@@ -34,14 +35,16 @@ const SettingsModal = ({ onClose }) => {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
       <div className="w-full max-w-md bg-gray-900 border border-white/10 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
         
+        {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-white/5">
           <h2 className="text-xl font-medium text-white capitalize">{mode} Settings</h2>
           <button onClick={onClose}><X size={20} className="text-gray-400" /></button>
         </div>
 
-        <div className="p-6 overflow-y-auto space-y-8">
+        {/* Content */}
+        <div className="p-6 overflow-y-auto space-y-8 flex-1">
           
-          {/* MEDITATION */}
+          {/* MEDITATION SETTINGS */}
           {mode === 'meditation' && (
             <div className="space-y-6">
               <div className="flex items-center justify-between bg-white/5 p-4 rounded-xl">
@@ -102,39 +105,40 @@ const SettingsModal = ({ onClose }) => {
             </div>
           )}
           
-          {/* POMODORO - Requested Feature */}
+          {/* POMODORO SETTINGS */}
           {mode === 'pomodoro' && (
              <div className="space-y-6">
-               {[
-                 { label: 'Work Duration (min)', key: 'work' },
-                 { label: 'Short Break (min)', key: 'shortBreak' },
-                 { label: 'Long Break (min)', key: 'longBreak' },
-               ].map((item) => (
-                 <div key={item.key} className="flex items-center justify-between bg-white/5 p-4 rounded-xl">
-                   <span className="text-gray-300">{item.label}</span>
-                   <div className="flex items-center gap-3">
-                     <button 
-                       onClick={() => updateSettings('pomodoro', { [item.key]: Math.max(1, settings.pomodoro[item.key] - 1) })}
-                       className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20"
-                     >-</button>
-                     <span className="w-8 text-center font-mono text-lg">{settings.pomodoro[item.key]}</span>
-                     <button 
-                       onClick={() => updateSettings('pomodoro', { [item.key]: settings.pomodoro[item.key] + 1 })}
-                       className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20"
-                     >+</button>
+               
+               {/* New Audio Config */}
+               <div className="space-y-4 border-b border-white/5 pb-6">
+                 <h3 className="text-xs uppercase text-gray-500 tracking-wider">Transition Sounds</h3>
+                 <div className="grid grid-cols-2 gap-4">
+                   <div>
+                     <label className="text-xs text-gray-400 block mb-1">Focus Start</label>
+                     <select 
+                       value={settings.pomodoro?.soundFocusStart || 'bowl'}
+                       onChange={(e) => updateSettings('pomodoro', { soundFocusStart: e.target.value })}
+                       className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm text-white outline-none"
+                     >
+                       <option value="none">Mute</option>
+                       {sounds.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                     </select>
+                   </div>
+                   <div>
+                     <label className="text-xs text-gray-400 block mb-1">Break Start</label>
+                     <select 
+                       value={settings.pomodoro?.soundBreakStart || 'chime'}
+                       onChange={(e) => updateSettings('pomodoro', { soundBreakStart: e.target.value })}
+                       className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm text-white outline-none"
+                     >
+                       <option value="none">Mute</option>
+                       {sounds.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                     </select>
                    </div>
                  </div>
-               ))}
-               <p className="text-xs text-gray-500 text-center pt-2">
-                 Changes apply to the next timer start.
-               </p>
-             </div>
-          )}
+               </div>
 
-          {mode === 'flow' && (
-             <div className="text-center text-gray-400 py-4">
-               Flow mode automatically tracks your momentum. <br/>
-               Alerts at 90m (Ultradian Rhythm).
+               <SequenceEditor />
              </div>
           )}
         </div>

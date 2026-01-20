@@ -18,8 +18,9 @@ import CreditsFooter from './CreditsFooter';
 const TimerView = () => {
   const { 
     status, remaining, elapsed, progress, mode, settings,
-    flowState, distractions, addDistraction, finishSession,
-    pomoPhase, nextPomoPhase, 
+    flowState, distractions, 
+    currentStepIndex, 
+    addDistraction, finishSession, nextSequenceStep, 
     tick, setStatus, reset 
   } = useTimerStore();
 
@@ -28,7 +29,7 @@ const TimerView = () => {
   
   useWakeLock(status === 'running');
 
-  // --- ENGINE SETUP ---
+  // --- ENGINE & AUDIO ---
   useEffect(() => {
     workerRef.current = new TimerWorker();
     workerRef.current.onmessage = (e) => {
@@ -36,8 +37,8 @@ const TimerView = () => {
       if (type === 'TICK') tick(payload);
       else if (type === 'COMPLETED') {
         if (mode === 'pomodoro') {
-          audioEngine.playBell('bowl', 1.0, 10);
-          nextPomoPhase(); 
+           // Sequence Logic
+           nextSequenceStep(); 
         } else {
           setStatus('completed');
           const soundKey = settings?.meditation?.soundEnd || 'bowl';
@@ -47,8 +48,6 @@ const TimerView = () => {
       }
     };
     
-    // --- LOCAL ASSETS RESTORED ---
-    // User must put bowl.mp3, chime.mp3, rain.mp3, forest.mp3 in /public/sounds/
     const loadAssets = async () => {
        await audioEngine.loadSound('bowl', '/sounds/bowl.mp3'); 
        await audioEngine.loadSound('chime', '/sounds/chime.mp3');
@@ -57,25 +56,48 @@ const TimerView = () => {
     };
     loadAssets();
 
-    const handleInterval = () => {
-        const soundKey = settings?.meditation?.soundInterval || 'chime';
-        audioEngine.playBell(soundKey, 0.8, 8);
-    };
-    const handleUltradian = () => {
-        const soundKey = settings?.flow?.sound90Min || 'chime';
-        audioEngine.playBell(soundKey, 0.5, 5);
+    // Event Listeners
+    const handleInterval = () => audioEngine.playBell(settings?.meditation?.soundInterval || 'chime', 0.8, 8);
+    const handleUltradian = () => audioEngine.playBell(settings?.flow?.sound90Min || 'chime', 0.5, 5);
+    
+    const handlePhaseChange = (e) => {
+      const nextType = e.detail.type; 
+      const soundKey = nextType === 'focus' 
+        ? (settings.pomodoro?.soundFocusStart || 'bowl')
+        : (settings.pomodoro?.soundBreakStart || 'chime');
+      
+      if (soundKey !== 'none') {
+        audioEngine.playBell(soundKey, 1.0, 10);
+      }
     };
 
     window.addEventListener('interval-bell', handleInterval);
     window.addEventListener('ultradian-bell', handleUltradian);
+    window.addEventListener('phase-change', handlePhaseChange);
 
     return () => {
       workerRef.current.terminate();
       window.removeEventListener('interval-bell', handleInterval);
       window.removeEventListener('ultradian-bell', handleUltradian);
+      window.removeEventListener('phase-change', handlePhaseChange);
     };
   }, [mode, settings]);
 
+  // --- AUTO-START ---
+  useEffect(() => {
+    if (mode === 'pomodoro' && status === 'running') {
+      const activeSeq = settings.sequences.find(s => s.id === settings.activeSequenceId);
+      const currentStep = activeSeq?.steps[currentStepIndex];
+      if (currentStep) {
+        workerRef.current.postMessage({ 
+          type: 'START', 
+          payload: { durationSeconds: currentStep.duration * 60, countUp: false } 
+        });
+      }
+    }
+  }, [currentStepIndex, mode]);
+
+  // --- CONTROLS ---
   const toggleTimer = () => {
     audioEngine.init();
     if (status === 'running') {
@@ -90,36 +112,58 @@ const TimerView = () => {
         payload: { durationSeconds: durationVal, countUp: isCountUp } 
       });
       setStatus('running');
-      if (status === 'idle') audioEngine.playBell('bowl', 1.0, 10);
+      
+      // Start Sound
+      if (status === 'idle') {
+        if (mode === 'pomodoro') {
+           const sound = settings.pomodoro?.soundFocusStart || 'bowl';
+           if (sound !== 'none') audioEngine.playBell(sound, 1.0, 10);
+        } else {
+           audioEngine.playBell('bowl', 1.0, 10);
+        }
+      }
     }
   };
 
   const handleStop = () => {
     workerRef.current.postMessage({ type: 'STOP' });
     audioEngine.stopAll();
-    
-    // FLOW MODE: Stop triggers the Summary Card
-    if (mode === 'flow') {
-      finishSession(); 
-    } else {
-      reset();
-    }
+    if (mode === 'flow' && elapsed > 60) finishSession(); 
+    else reset(); // This is the function that was failing
   };
 
-  // --- RENDER HELPERS ---
-  const radius = 120;
-  const circumference = 2 * Math.PI * radius;
-  const isInfinite = mode === 'flow' || mode === 'stopwatch' || (mode === 'meditation' && settings.meditation.infinite);
-  const dashOffset = isInfinite ? 0 : circumference * (1 - progress); 
+  // --- VISUAL VARIABLES ---
+  const activeSeq = settings.sequences.find(s => s.id === settings.activeSequenceId);
+  const currentStep = activeSeq?.steps[currentStepIndex];
+
+  let progressPct = 0;
+  let totalRemainingText = "";
   
-  const getStrokeColor = () => {
-    if (mode === 'pomodoro' && pomoPhase !== 'work') return "#10b981"; 
-    if (mode === 'flow') {
-       if (flowState === 'flow_zone') return "#8b5cf6"; // Deep Focus Violet
-       if (flowState === 'ultradian_limit') return "#f59e0b"; // Warning Orange
-    }
-    return "#C41E3A"; 
-  };
+  // THEME COLOR LOGIC
+  const isBreak = mode === 'pomodoro' && currentStep?.type === 'break';
+  // If Break: Green. If Focus: Red.
+  const activeColorHex = isBreak ? "#10b981" : "#C41E3A"; 
+  const activeColorClass = isBreak ? "text-emerald-500" : "text-red-500";
+
+  if (mode === 'pomodoro' && activeSeq) {
+    const totalDuration = activeSeq.steps.reduce((acc, step) => acc + (step.duration * 60), 0);
+    const prevStepsDuration = activeSeq.steps.slice(0, currentStepIndex).reduce((acc, step) => acc + (step.duration * 60), 0);
+    const totalElapsed = prevStepsDuration + elapsed;
+    progressPct = totalElapsed / totalDuration;
+
+    const totalSecondsLeft = Math.max(0, totalDuration - totalElapsed);
+    const m = Math.floor(totalSecondsLeft / 60);
+    const h = Math.floor(m / 60);
+    const mDisp = m % 60;
+    totalRemainingText = h > 0 ? `${h}h ${mDisp}m left total` : `${mDisp}m left total`;
+  } else {
+    const isInfinite = mode === 'flow' || mode === 'stopwatch' || (mode === 'meditation' && settings.meditation.infinite);
+    progressPct = isInfinite ? 0 : progress; 
+  }
+  
+  if (progressPct > 1) progressPct = 1;
+  const circumference = 2 * Math.PI * 120;
+  const dashOffset = circumference * (1 - progressPct);
 
   return (
     <div className="h-screen w-full bg-black text-white flex flex-col items-center justify-between p-6 overflow-hidden relative">
@@ -135,16 +179,12 @@ const TimerView = () => {
       <main className="flex-1 flex flex-col items-center justify-center w-full max-w-md relative">
         <div className="relative w-72 h-72 sm:w-80 sm:h-80 flex items-center justify-center">
             
-            {/* Flow Zone Glow Effect */}
-            {flowState === 'flow_zone' && status === 'running' && (
-               <div className="absolute inset-0 rounded-full blur-3xl bg-violet-900/40 animate-pulse" />
-            )}
-
+            {/* SVG Ring - B&W Style, only stroke is colored */}
             <svg className="absolute w-full h-full transform -rotate-90 drop-shadow-2xl pointer-events-none" viewBox="0 0 300 300">
-                <circle cx="150" cy="150" r={radius} stroke="#1f2937" strokeWidth="6" fill="transparent" />
+                <circle cx="150" cy="150" r={120} stroke="#1f2937" strokeWidth="6" fill="transparent" />
                 <motion.circle
-                    cx="150" cy="150" r={radius}
-                    stroke={getStrokeColor()}
+                    cx="150" cy="150" r={120}
+                    stroke={mode === 'flow' && flowState === 'flow_zone' ? "#8b5cf6" : activeColorHex}
                     strokeWidth="8" fill="transparent"
                     strokeLinecap="round"
                     strokeDasharray={circumference}
@@ -153,51 +193,58 @@ const TimerView = () => {
                 />
             </svg>
             
-            <TimerInput />
-            
-            {/* Distraction Button */}
-            {mode === 'flow' && status === 'running' && (
-              <motion.button 
-                initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-                onClick={addDistraction}
-                className="absolute bottom-16 flex items-center gap-2 px-3 py-1 bg-white/10 rounded-full text-xs hover:bg-white/20 text-gray-400 hover:text-white transition-colors border border-white/5"
-              >
-                <AlertCircle size={12} />
-                <span>Distracted ({distractions})</span>
-              </motion.button>
-            )}
+            <div className="flex flex-col items-center z-20">
+              <TimerInput />
+              
+              {/* Status Text (Colored) */}
+              <div className="h-6 flex flex-col items-center justify-center mt-2">
+                 {mode === 'pomodoro' && (
+                   <span className={clsx(
+                     "text-xs font-bold tracking-[0.2em] uppercase transition-colors duration-300",
+                     // Logic: If Idle, gray. If Running, Red/Green.
+                     status === 'running' ? activeColorClass : "text-gray-500"
+                   )}>
+                     {status === 'running' ? currentStep?.type : status}
+                   </span>
+                 )}
+
+                 {mode === 'pomodoro' && (
+                   <span className="text-[10px] text-gray-600 uppercase tracking-widest mt-1">
+                     {totalRemainingText}
+                   </span>
+                 )}
+                 
+                 {mode !== 'pomodoro' && (
+                    <span className={clsx(
+                      "text-xs font-bold tracking-[0.2em] uppercase",
+                      status === 'running' ? "text-red-500" : "text-gray-500"
+                    )}>
+                      {status === 'idle' ? 'Ready' : status}
+                    </span>
+                 )}
+              </div>
+            </div>
         </div>
       </main>
 
+      {/* Footer Controls (Minimalist B&W) */}
       <footer className="w-full max-w-lg flex flex-col items-center gap-8 pb-8 z-10">
         <div className="flex items-center gap-10">
           
-          {/* RESET / FINISH BUTTON */}
           <button 
             onClick={handleStop}
-            className={clsx(
-              "p-4 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-white/5",
-              mode === 'flow' && status !== 'idle' && "bg-violet-900/20 text-violet-300 border-violet-500/30 hover:bg-violet-900/40"
-            )}
-            title={mode === 'flow' ? "Finish Session" : "Reset Timer"}
+            className="p-4 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-white/5"
           >
             {mode === 'flow' && status !== 'idle' ? <StopCircle size={22} /> : <RotateCcw size={22} />}
           </button>
 
-          {/* PLAY / PAUSE */}
           <button 
             onClick={toggleTimer}
-            className={clsx(
-              "p-7 rounded-[2.5rem] text-white shadow-lg transition-all active:scale-95 border-t",
-              mode === 'pomodoro' && pomoPhase !== 'work' 
-                 ? "bg-gradient-to-b from-emerald-600 to-emerald-800 shadow-emerald-900/40 border-emerald-500"
-                 : "bg-gradient-to-b from-red-600 to-red-800 shadow-red-900/40 border-red-500"
-            )}
+            className="p-7 rounded-[2.5rem] bg-white text-black hover:bg-gray-200 transition-all active:scale-95 shadow-lg shadow-white/10"
           >
             {status === 'running' ? <Pause size={32} fill="currentColor" /> : <Play size={32} fill="currentColor" className="ml-1" />}
           </button>
           
-          {/* SETTINGS */}
           <button 
              className={clsx("p-4 rounded-full transition-all border border-white/5", showSettings ? "bg-white text-black" : "bg-white/5 text-gray-400 hover:text-white")}
              onClick={() => setShowSettings(true)}

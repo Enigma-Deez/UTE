@@ -17,9 +17,26 @@ const useTimerStore = create(
           soundEnd: 'bowl',
           soundInterval: 'chime'
         },
-        // POMODORO SETTINGS (Defaults)
-        pomodoro: { work: 25, shortBreak: 5, longBreak: 15, autoStart: false },
-        // FLOW SETTINGS
+        pomodoro: { 
+          // New Audio Settings
+          soundFocusStart: 'bowl', 
+          soundBreakStart: 'chime', 
+        },
+        sequences: [
+          {
+            id: 'default-pomo',
+            name: 'Classic Pomodoro',
+            steps: [
+              { type: 'focus', duration: 25 },
+              { type: 'break', duration: 5 },
+              { type: 'focus', duration: 25 },
+              { type: 'break', duration: 5 },
+              { type: 'focus', duration: 25 },
+              { type: 'break', duration: 15 }, 
+            ]
+          }
+        ],
+        activeSequenceId: 'default-pomo',
         flow: { sound90Min: 'chime' }
       },
 
@@ -29,27 +46,35 @@ const useTimerStore = create(
       elapsed: 0,
       progress: 0,
       
-      // Flow / Productivity Metrics
+      // Sequence Runtime
+      currentStepIndex: 0,
+      
+      // Flow / Metrics
       distractions: 0,
       flowState: 'none', 
-      lastSession: null, // Holds data for the Summary Modal
-
-      // Pomodoro Internal State
-      pomoPhase: 'work',
-      pomoCycleCount: 0,
+      lastSession: null, 
 
       // --- ACTIONS ---
 
       setMode: (mode) => {
-        const { settings } = get();
+        const state = get();
         let newRemaining = 0;
         
-        if (mode === 'meditation') newRemaining = settings.meditation.infinite ? 0 : settings.meditation.duration;
-        if (mode === 'pomodoro') newRemaining = settings.pomodoro.work * 60;
+        if (mode === 'meditation') newRemaining = state.settings.meditation.infinite ? 0 : state.settings.meditation.duration;
+        
+        if (mode === 'pomodoro') {
+          const seq = state.settings.sequences.find(s => s.id === state.settings.activeSequenceId);
+          if (seq && seq.steps.length > 0) {
+            newRemaining = seq.steps[0].duration * 60;
+          } else {
+            newRemaining = 1500; 
+          }
+        }
         
         set({ 
           mode, status: 'idle', remaining: newRemaining, elapsed: 0, progress: 0,
-          distractions: 0, flowState: 'none', lastSession: null
+          distractions: 0, flowState: 'none', lastSession: null,
+          currentStepIndex: 0 
         });
       },
 
@@ -57,21 +82,85 @@ const useTimerStore = create(
         const { mode } = get();
         if (mode === 'meditation') {
           get().updateSettings('meditation', { duration: seconds });
-        } else if (mode === 'pomodoro') {
-          get().updateSettings('pomodoro', { work: seconds / 60 });
-        }
-        get().reset();
+          get().reset();
+        } 
       },
 
       addDistraction: () => set((state) => ({ distractions: state.distractions + 1 })),
 
-      updateSettings: (mode, newValues) => {
+      updateSettings: (category, newValues) => {
         set((state) => ({
-          settings: { ...state.settings, [mode]: { ...state.settings[mode], ...newValues } }
+          settings: { ...state.settings, [category]: { ...state.settings[category], ...newValues } }
         }));
-        // If updating current mode while idle, refresh to apply changes
-        if (get().status === 'idle' && get().mode === mode) {
-           get().reset();
+        if (get().status === 'idle') get().reset();
+      },
+
+      // --- SEQUENCE ACTIONS ---
+      addSequence: (name, steps) => {
+        const newSeq = { id: crypto.randomUUID(), name, steps };
+        set(state => ({
+          settings: {
+            ...state.settings,
+            sequences: [...state.settings.sequences, newSeq],
+            activeSequenceId: newSeq.id
+          }
+        }));
+        get().setMode('pomodoro');
+      },
+
+      updateSequence: (id, updatedFields) => {
+        set(state => ({
+          settings: {
+            ...state.settings,
+            sequences: state.settings.sequences.map(s => s.id === id ? { ...s, ...updatedFields } : s)
+          }
+        }));
+        if (get().settings.activeSequenceId === id && get().status === 'idle') {
+          get().setMode('pomodoro');
+        }
+      },
+
+      deleteSequence: (id) => {
+        set(state => {
+          const newSeqs = state.settings.sequences.filter(s => s.id !== id);
+          const nextActive = newSeqs.length > 0 ? newSeqs[0].id : null;
+          return {
+            settings: { ...state.settings, sequences: newSeqs, activeSequenceId: nextActive }
+          };
+        });
+        get().setMode('pomodoro');
+      },
+
+      setActiveSequence: (id) => {
+        set(state => ({ settings: { ...state.settings, activeSequenceId: id } }));
+        get().setMode('pomodoro');
+      },
+
+      nextSequenceStep: () => {
+        const { settings, currentStepIndex } = get();
+        const seq = settings.sequences.find(s => s.id === settings.activeSequenceId);
+        
+        if (!seq) return;
+
+        const nextIndex = currentStepIndex + 1;
+
+        if (nextIndex < seq.steps.length) {
+          const nextStep = seq.steps[nextIndex];
+          
+          // Emit event for audio
+          window.dispatchEvent(new CustomEvent('phase-change', { 
+            detail: { type: nextStep.type } 
+          }));
+
+          set({
+            status: 'running', 
+            currentStepIndex: nextIndex,
+            remaining: nextStep.duration * 60,
+            elapsed: 0,
+            progress: 0
+          });
+        } else {
+          set({ status: 'completed' });
         }
       },
 
@@ -90,18 +179,13 @@ const useTimerStore = create(
         const state = get();
         const { mode, settings } = state;
 
-        // FLOW MODE LOGIC
         let newFlowState = state.flowState;
         if (mode === 'flow') {
-          // Zone Indicator (>20 mins)
           if (elapsed > 1200) newFlowState = 'flow_zone'; 
-          // Ultradian Rhythm (>90 mins)
           if (elapsed > 5400) newFlowState = 'ultradian_limit'; 
-          // 90 Minute Alert Trigger
           if (elapsed === 5400) window.dispatchEvent(new CustomEvent('ultradian-bell'));
         }
 
-        // MEDITATION INTERVALS
         if (mode === 'meditation' && settings.meditation.intervals.includes(elapsed)) {
            window.dispatchEvent(new CustomEvent('interval-bell'));
         }
@@ -109,71 +193,31 @@ const useTimerStore = create(
         set({ remaining, elapsed, progress, flowState: newFlowState });
       },
 
-      // --- CRITICAL: FLOW BREAK CALCULATION ---
       finishSession: async (rating = 0) => {
-        const state = get();
-        const mins = Math.floor(state.elapsed / 60);
-        
-        // Flowtime Formula
-        let breakRec = 5;
-        if (mins < 25) breakRec = 5;
-        else if (mins >= 25 && mins < 50) breakRec = 10; // Range 8-10
-        else if (mins >= 50 && mins < 90) breakRec = 15;
-        else if (mins >= 90) breakRec = 25; // Range 20-30
+         const state = get();
+         const mins = Math.floor(state.elapsed / 60);
+         let breakRec = 5;
+         if (mins >= 25) breakRec = 10;
+         if (mins >= 50) breakRec = 15;
+         if (mins >= 90) breakRec = 25;
 
-        const sessionData = {
-          id: crypto.randomUUID(),
-          type: state.mode,
-          startTime: Date.now() - (state.elapsed * 1000),
-          duration: state.elapsed,
-          distractions: state.distractions,
-          rating,
-          breakRecommendation: breakRec,
-          completed: true
-        };
-
-        // Save to DB (Future proofing)
-        try { await idbSet(`session-${sessionData.id}`, sessionData); } catch(e) { console.error(e); }
-
-        // Set lastSession to trigger the Modal, set Status to idle
-        set({ lastSession: sessionData, status: 'idle' });
+         const sessionData = { 
+             id: crypto.randomUUID(), 
+             type: state.mode, 
+             duration: state.elapsed, 
+             breakRecommendation: breakRec,
+             distractions: state.distractions,
+             completed: true 
+         };
+         try { await idbSet(`session-${sessionData.id}`, sessionData); } catch(e) {}
+         set({ lastSession: sessionData, status: 'idle' });
       },
 
-      nextPomoPhase: () => {
-        const { pomoPhase, pomoCycleCount, settings } = get();
-        const conf = settings.pomodoro;
-        
-        let nextPhase = 'work';
-        let nextDuration = conf.work * 60;
-        let nextCount = pomoCycleCount;
-
-        if (pomoPhase === 'work') {
-          nextCount += 1;
-          if (nextCount % 4 === 0) {
-            nextPhase = 'longBreak';
-            nextDuration = conf.longBreak * 60;
-          } else {
-            nextPhase = 'shortBreak';
-            nextDuration = conf.shortBreak * 60;
-          }
-        } else {
-          nextPhase = 'work';
-          nextDuration = conf.work * 60;
-        }
-
-        set({
-          status: 'idle',
-          pomoPhase: nextPhase,
-          remaining: nextDuration,
-          pomoCycleCount: nextCount,
-          progress: 0
-        });
-      },
-
+      // *** THIS WAS LIKELY MISSING IN YOUR PREVIOUS COPY ***
       reset: () => get().setMode(get().mode)
     }),
     {
-      name: 'timer-storage-final',
+      name: 'timer-storage-final-v3', // New version to ensure fresh state
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({ settings: state.settings, mode: state.mode }),
     }
