@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Bell, Trash2, Plus } from 'lucide-react';
+import { X, Plus, Trash2 } from 'lucide-react';
 import useTimerStore from '../store/useTimerStore';
 import clsx from 'clsx';
 
@@ -20,7 +20,6 @@ const SettingsModal = ({ onClose }) => {
     let seconds = 0;
     if (parts.length === 1) seconds = parts[0] * 60;
     else seconds = (parts[0] * 60) + parts[1];
-    
     toggleInterval(seconds);
     setNewInterval('');
   };
@@ -33,21 +32,18 @@ const SettingsModal = ({ onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
-      <div className="w-full max-w-md bg-gray-900 border border-white/10 rounded-3xl overflow-hidden shadow-2xl h-[80vh] flex flex-col">
+      <div className="w-full max-w-md bg-gray-900 border border-white/10 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
         
-        {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-white/5">
           <h2 className="text-xl font-medium text-white capitalize">{mode} Settings</h2>
           <button onClick={onClose}><X size={20} className="text-gray-400" /></button>
         </div>
 
-        {/* Scrollable Content */}
-        <div className="p-6 overflow-y-auto flex-1 space-y-8">
+        <div className="p-6 overflow-y-auto space-y-8">
           
-          {/* MEDITATION SPECIFIC: ISSUE A */}
+          {/* MEDITATION */}
           {mode === 'meditation' && (
-            <>
-              {/* Duration & Infinity */}
+            <div className="space-y-6">
               <div className="flex items-center justify-between bg-white/5 p-4 rounded-xl">
                 <span className="text-gray-300">Infinite Session</span>
                 <button 
@@ -58,66 +54,87 @@ const SettingsModal = ({ onClose }) => {
                 </button>
               </div>
 
-              {/* Sound Selection */}
               <div className="space-y-4">
-                <h3 className="text-xs uppercase text-gray-500 tracking-wider">Soundscape</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs text-gray-400 mb-1 block">Ending Sound</label>
-                    <select 
-                      value={settings.meditation.soundEnd}
-                      onChange={(e) => updateSettings('meditation', { soundEnd: e.target.value })}
-                      className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm text-white focus:outline-none"
-                    >
-                      {sounds.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-400 mb-1 block">Interval Sound</label>
-                    <select 
-                      value={settings.meditation.soundInterval}
-                      onChange={(e) => updateSettings('meditation', { soundInterval: e.target.value })}
-                      className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm text-white focus:outline-none"
-                    >
-                      {sounds.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-                    </select>
-                  </div>
-                </div>
+                 <h3 className="text-xs uppercase text-gray-500 tracking-wider">Soundscape</h3>
+                 <div className="grid grid-cols-2 gap-4">
+                   <div>
+                     <label className="text-xs text-gray-400 block mb-1">Ending</label>
+                     <select 
+                       value={settings.meditation.soundEnd}
+                       onChange={(e) => updateSettings('meditation', { soundEnd: e.target.value })}
+                       className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm text-white outline-none"
+                     >
+                       {sounds.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                     </select>
+                   </div>
+                   <div>
+                     <label className="text-xs text-gray-400 block mb-1">Intervals</label>
+                     <select 
+                       value={settings.meditation.soundInterval}
+                       onChange={(e) => updateSettings('meditation', { soundInterval: e.target.value })}
+                       className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm text-white outline-none"
+                     >
+                       {sounds.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                     </select>
+                   </div>
+                 </div>
               </div>
 
-              {/* Interval Checkpoints */}
               <div>
-                <h3 className="text-xs uppercase text-gray-500 tracking-wider mb-3">Sub-Alarms (Checkpoints)</h3>
-                
+                <h3 className="text-xs uppercase text-gray-500 tracking-wider mb-3">Sub-Alarms</h3>
                 <form onSubmit={handleAddInterval} className="flex gap-2 mb-4">
                   <input 
-                    type="text" 
-                    placeholder="e.g. 5 or 5:30" 
-                    value={newInterval}
-                    onChange={(e) => setNewInterval(e.target.value)}
-                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 text-white placeholder-gray-600 focus:outline-none focus:border-white/30"
+                    type="text" placeholder="e.g. 5 or 5:30" 
+                    value={newInterval} onChange={(e) => setNewInterval(e.target.value)}
+                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 text-white focus:outline-none"
                   />
                   <button type="submit" className="bg-white text-black px-4 rounded-xl font-medium"><Plus size={18} /></button>
                 </form>
-
                 <div className="space-y-2">
-                  {settings.meditation.intervals.length === 0 && <p className="text-sm text-gray-600 italic">No sub-alarms set.</p>}
                   {settings.meditation.intervals.map((t) => (
                     <div key={t} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5">
                       <span className="font-mono text-white">{formatSec(t)}</span>
-                      <button onClick={() => toggleInterval(t)} className="text-red-400 hover:text-red-300"><Trash2 size={16} /></button>
+                      <button onClick={() => toggleInterval(t)} className="text-red-400"><Trash2 size={16} /></button>
                     </div>
                   ))}
                 </div>
               </div>
-            </>
+            </div>
           )}
           
-          {/* POMODORO (Existing) */}
+          {/* POMODORO - Requested Feature */}
           {mode === 'pomodoro' && (
              <div className="space-y-6">
-                {/* ... existing pomodoro logic ... */}
-                <div className="text-sm text-gray-400 text-center">Customize your 25/5 rhythm here.</div>
+               {[
+                 { label: 'Work Duration (min)', key: 'work' },
+                 { label: 'Short Break (min)', key: 'shortBreak' },
+                 { label: 'Long Break (min)', key: 'longBreak' },
+               ].map((item) => (
+                 <div key={item.key} className="flex items-center justify-between bg-white/5 p-4 rounded-xl">
+                   <span className="text-gray-300">{item.label}</span>
+                   <div className="flex items-center gap-3">
+                     <button 
+                       onClick={() => updateSettings('pomodoro', { [item.key]: Math.max(1, settings.pomodoro[item.key] - 1) })}
+                       className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20"
+                     >-</button>
+                     <span className="w-8 text-center font-mono text-lg">{settings.pomodoro[item.key]}</span>
+                     <button 
+                       onClick={() => updateSettings('pomodoro', { [item.key]: settings.pomodoro[item.key] + 1 })}
+                       className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20"
+                     >+</button>
+                   </div>
+                 </div>
+               ))}
+               <p className="text-xs text-gray-500 text-center pt-2">
+                 Changes apply to the next timer start.
+               </p>
+             </div>
+          )}
+
+          {mode === 'flow' && (
+             <div className="text-center text-gray-400 py-4">
+               Flow mode automatically tracks your momentum. <br/>
+               Alerts at 90m (Ultradian Rhythm).
              </div>
           )}
         </div>

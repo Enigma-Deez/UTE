@@ -1,6 +1,6 @@
-/* src/store/useTimerStore.js */
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { set as idbSet } from 'idb-keyval'; 
 
 const useTimerStore = create(
   persist(
@@ -17,7 +17,9 @@ const useTimerStore = create(
           soundEnd: 'bowl',
           soundInterval: 'chime'
         },
-        pomodoro: { work: 25, shortBreak: 5, longBreak: 15 },
+        // POMODORO SETTINGS (Defaults)
+        pomodoro: { work: 25, shortBreak: 5, longBreak: 15, autoStart: false },
+        // FLOW SETTINGS
         flow: { sound90Min: 'chime' }
       },
 
@@ -30,9 +32,9 @@ const useTimerStore = create(
       // Flow / Productivity Metrics
       distractions: 0,
       flowState: 'none', 
-      lastSession: null, 
+      lastSession: null, // Holds data for the Summary Modal
 
-      // Pomodoro
+      // Pomodoro Internal State
       pomoPhase: 'work',
       pomoCycleCount: 0,
 
@@ -44,7 +46,6 @@ const useTimerStore = create(
         
         if (mode === 'meditation') newRemaining = settings.meditation.infinite ? 0 : settings.meditation.duration;
         if (mode === 'pomodoro') newRemaining = settings.pomodoro.work * 60;
-        // Flow/Stopwatch start at 0
         
         set({ 
           mode, status: 'idle', remaining: newRemaining, elapsed: 0, progress: 0,
@@ -52,18 +53,13 @@ const useTimerStore = create(
         });
       },
 
-      // *** THE MISSING FIX *** 
-      // This handles the manual time input from the UI
       setDuration: (seconds) => {
         const { mode } = get();
         if (mode === 'meditation') {
           get().updateSettings('meditation', { duration: seconds });
         } else if (mode === 'pomodoro') {
-          // Pomodoro settings usually store minutes, so we convert.
-          // Decimals (e.g., 0.5 minutes for 30s) work fine mathematically.
           get().updateSettings('pomodoro', { work: seconds / 60 });
         }
-        // Force a reset to apply the new time immediately
         get().reset();
       },
 
@@ -73,8 +69,10 @@ const useTimerStore = create(
         set((state) => ({
           settings: { ...state.settings, [mode]: { ...state.settings[mode], ...newValues } }
         }));
-        // Refresh if idle
-        if (get().status === 'idle') get().setMode(mode);
+        // If updating current mode while idle, refresh to apply changes
+        if (get().status === 'idle' && get().mode === mode) {
+           get().reset();
+        }
       },
 
       toggleInterval: (timeInSeconds) => {
@@ -92,15 +90,18 @@ const useTimerStore = create(
         const state = get();
         const { mode, settings } = state;
 
-        // Flow Logic
+        // FLOW MODE LOGIC
         let newFlowState = state.flowState;
         if (mode === 'flow') {
+          // Zone Indicator (>20 mins)
           if (elapsed > 1200) newFlowState = 'flow_zone'; 
+          // Ultradian Rhythm (>90 mins)
           if (elapsed > 5400) newFlowState = 'ultradian_limit'; 
+          // 90 Minute Alert Trigger
           if (elapsed === 5400) window.dispatchEvent(new CustomEvent('ultradian-bell'));
         }
 
-        // Meditation Interval Logic
+        // MEDITATION INTERVALS
         if (mode === 'meditation' && settings.meditation.intervals.includes(elapsed)) {
            window.dispatchEvent(new CustomEvent('interval-bell'));
         }
@@ -108,13 +109,17 @@ const useTimerStore = create(
         set({ remaining, elapsed, progress, flowState: newFlowState });
       },
 
+      // --- CRITICAL: FLOW BREAK CALCULATION ---
       finishSession: async (rating = 0) => {
         const state = get();
         const mins = Math.floor(state.elapsed / 60);
+        
+        // Flowtime Formula
         let breakRec = 5;
-        if (mins >= 25 && mins < 50) breakRec = 10;
-        if (mins >= 50 && mins < 90) breakRec = 15;
-        if (mins >= 90) breakRec = 25;
+        if (mins < 25) breakRec = 5;
+        else if (mins >= 25 && mins < 50) breakRec = 10; // Range 8-10
+        else if (mins >= 50 && mins < 90) breakRec = 15;
+        else if (mins >= 90) breakRec = 25; // Range 20-30
 
         const sessionData = {
           id: crypto.randomUUID(),
@@ -127,13 +132,48 @@ const useTimerStore = create(
           completed: true
         };
 
+        // Save to DB (Future proofing)
+        try { await idbSet(`session-${sessionData.id}`, sessionData); } catch(e) { console.error(e); }
+
+        // Set lastSession to trigger the Modal, set Status to idle
         set({ lastSession: sessionData, status: 'idle' });
+      },
+
+      nextPomoPhase: () => {
+        const { pomoPhase, pomoCycleCount, settings } = get();
+        const conf = settings.pomodoro;
+        
+        let nextPhase = 'work';
+        let nextDuration = conf.work * 60;
+        let nextCount = pomoCycleCount;
+
+        if (pomoPhase === 'work') {
+          nextCount += 1;
+          if (nextCount % 4 === 0) {
+            nextPhase = 'longBreak';
+            nextDuration = conf.longBreak * 60;
+          } else {
+            nextPhase = 'shortBreak';
+            nextDuration = conf.shortBreak * 60;
+          }
+        } else {
+          nextPhase = 'work';
+          nextDuration = conf.work * 60;
+        }
+
+        set({
+          status: 'idle',
+          pomoPhase: nextPhase,
+          remaining: nextDuration,
+          pomoCycleCount: nextCount,
+          progress: 0
+        });
       },
 
       reset: () => get().setMode(get().mode)
     }),
     {
-      name: 'timer-storage-v4',
+      name: 'timer-storage-final',
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({ settings: state.settings, mode: state.mode }),
     }
